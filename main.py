@@ -5,7 +5,7 @@ Reads every ``<id>.in`` case from ``$MAKEFUN_INPUT_DIR`` (default ``/input/``) a
 writes ``<id>.out`` to ``$MAKEFUN_OUTPUT_DIR`` (default ``/output/``).  Standard
 library only, no network, deterministic: two runs on one case write identical bytes.
 
-v2 model -- light mean-reversion tilt toward the 4-hour mean:
+v3 model -- light mean-reversion tilt toward the 4-hour mean, tempered weight:
 
     forecast = last + BETA * (mean(last 240 closes) - last)
              = (1 - BETA) * last + BETA * mean(last 240 closes)
@@ -18,6 +18,11 @@ persistence (the martingale answer) with a small pull toward the recent 4-hour m
 not toward a 1.3-hour EWMA.  v1's EWMA(halflife=80) was both too short (it chases
 noise, not the multi-hour mean) and weighted too heavily (0.7), which made it fight
 genuine trends and score 8% worse than persistence on the pseudo-checkpoints.
+
+v2 used BETA=0.20, the in-sample optimum on the dense backtest (-2.5%).  v3 tempers
+it to 0.15: the 4-hour mean reversion is real but the edge is modest and regime
+dependent (a strong trend can overwhelm it), so a slightly lighter weight keeps most
+of the gain (-2.1%) with a smaller worst case if the final window trends hard.
 """
 
 import json
@@ -30,7 +35,7 @@ MIN_PRICE = 0.00001
 MAX_PRICE = 9999999.99999
 
 # Weight on the 4-hour mean; the rest stays on the checkpoint close.
-BETA = 0.20
+BETA = 0.15
 # Window of closes averaged for the anchor (minutes); the reversion timescale.
 ANCHOR = 240
 
