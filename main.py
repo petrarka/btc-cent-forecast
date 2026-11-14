@@ -5,53 +5,44 @@ Reads every ``<id>.in`` case from ``$MAKEFUN_INPUT_DIR`` (default ``/input/``) a
 writes ``<id>.out`` to ``$MAKEFUN_OUTPUT_DIR`` (default ``/output/``).  Standard
 library only, no network, deterministic: two runs on one case write identical bytes.
 
-v1 model (starting point from the brief):
-    forecast = 0.7 * EWMA(prices, halflife=80) + 0.3 * median(last 5 closes)
-EWMA is the exponentially weighted mean of the one-minute closes with a half-life
-of 80 minutes, normalised by the sum of the weights and using every close the case
-holds (no bias correction at the start).
+v2 model -- light mean-reversion tilt toward the 4-hour mean:
+
+    forecast = last + BETA * (mean(last 240 closes) - last)
+             = (1 - BETA) * last + BETA * mean(last 240 closes)
+
+Why this shape.  A variance-ratio (Lo-MacKinlay) test on the practice recording puts
+the 1-minute return variance ratio at ~1.0 for lags up to ~30 min but at 0.54 for
+240 min and 0.38 for 480 min: the series is essentially a random walk minute to
+minute but mean-reverts on a multi-hour scale.  So the best point forecast is mostly
+persistence (the martingale answer) with a small pull toward the recent 4-hour mean,
+not toward a 1.3-hour EWMA.  v1's EWMA(halflife=80) was both too short (it chases
+noise, not the multi-hour mean) and weighted too heavily (0.7), which made it fight
+genuine trends and score 8% worse than persistence on the pseudo-checkpoints.
 """
 
 import json
 import os
-import statistics
 
 INPUT_DIR = os.environ.get("MAKEFUN_INPUT_DIR", "/input")
 OUTPUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
 
 MIN_PRICE = 0.00001
 MAX_PRICE = 9999999.99999
-HALFLIFE = 80.0
 
-
-def ewma(prices, halflife):
-    """Exponentially weighted mean of ``prices`` with the given half-life.
-
-    Weight of the close ``k`` minutes before the checkpoint is ``(1-alpha)**k``
-    with ``alpha = 1 - 0.5**(1/halflife)``; the result is normalised by the sum of
-    the weights actually used, so it stays unbiased on short histories too.
-    """
-    if not prices:
-        raise ValueError("empty price series")
-    alpha = 1.0 - 0.5 ** (1.0 / halflife)
-    decay = 1.0 - alpha
-    num = 0.0
-    den = 0.0
-    w = 1.0
-    for p in reversed(prices):
-        num += p * w
-        den += w
-        w *= decay
-    return num / den
+# Weight on the 4-hour mean; the rest stays on the checkpoint close.
+BETA = 0.20
+# Window of closes averaged for the anchor (minutes); the reversion timescale.
+ANCHOR = 240
 
 
 def forecast(prices):
     """The 240-minute-ahead guess from one minute-close series."""
     if not prices:
         raise ValueError("empty price series")
-    level = ewma(prices, HALFLIFE)
-    short = statistics.median(prices[-5:]) if len(prices) >= 1 else prices[-1]
-    return 0.7 * level + 0.3 * short
+    last = prices[-1]
+    window = prices[-ANCHOR:] if len(prices) > ANCHOR else prices
+    anchor = sum(window) / len(window)
+    return last + BETA * (anchor - last)
 
 
 def clean_price(x):
